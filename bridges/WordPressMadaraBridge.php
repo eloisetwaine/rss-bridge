@@ -117,8 +117,8 @@ The default URI shows the Madara demo page.';
     protected function getMangaInfo($url)
     {
         $url_cache = 'TitleInfo_' . preg_replace('/[^\w]/', '.', rtrim($url, '/'));
-        $cache = $this->loadCacheValue($url_cache, 86400);
-        if (isset($cache)) {
+        $cache = $this->loadCacheValue($url_cache);
+        if ($cache) {
             return $cache;
         }
 

@@ -12,8 +12,14 @@ class FilterBridge extends FeedExpander
         'url' => [
             'name' => 'Feed URL',
             'type'  => 'text',
-            'defaultValue' => 'https://lorem-rss.herokuapp.com/feed?unit=day',
+            'exampleValue' => 'https://lorem-rss.herokuapp.com/feed?unit=day',
             'required' => true,
+        ],
+        'name' => [
+            'name'          => 'Feed name (optional)',
+            'type'          => 'text',
+            'exampleValue'  => 'My feed',
+            'required'      => false,
         ],
         'filter' => [
             'name' => 'Filter (regular expression!!!)',
@@ -73,17 +79,29 @@ class FilterBridge extends FeedExpander
         ],
     ]];
 
-    protected function parseItem($newItem)
+    public function collectData()
     {
-        $item = parent::parseItem($newItem);
+        $url = $this->getInput('url');
+        if (!Url::validate($url)) {
+            throw new \Exception('The url parameter must either refer to http or https protocol.');
+        }
+        $this->collectExpandableDatas($this->getURI());
+    }
 
+    protected function parseItem(array $item)
+    {
         // Generate title from first 50 characters of content?
         if ($this->getInput('title_from_content') && array_key_exists('content', $item)) {
             $content = str_get_html($item['content']);
-            $pos = strpos($item['content'], ' ', 50);
-            $item['title'] = substr($content->plaintext, 0, $pos);
-            if (strlen($content->plaintext) >= $pos) {
-                $item['title'] .= '...';
+            $plaintext = $content->plaintext;
+            if (mb_strlen($plaintext) < 51) {
+                $item['title'] = $plaintext;
+            } else {
+                $pos = strpos($item['content'], ' ', 50);
+                $item['title'] = substr($plaintext, 0, $pos);
+                if (strlen($plaintext) >= $pos) {
+                    $item['title'] .= '...';
+                }
             }
         }
 
@@ -146,20 +164,18 @@ class FilterBridge extends FeedExpander
     public function getURI()
     {
         $url = $this->getInput('url');
-
-        if (empty($url)) {
-            $url = parent::getURI();
+        if ($url) {
+            return $url;
         }
-
-        return $url;
+        return parent::getURI();
     }
 
-    public function collectData()
+    public function getName()
     {
-        if ($this->getInput('url') && substr($this->getInput('url'), 0, 4) !== 'http') {
-            // just in case someone finds a way to access local files by playing with the url
-            returnClientError('The url parameter must either refer to http or https protocol.');
+        $name = $this->getInput('name');
+        if ($name) {
+            return $name;
         }
-        $this->collectExpandableDatas($this->getURI());
+        return parent::getName();
     }
 }

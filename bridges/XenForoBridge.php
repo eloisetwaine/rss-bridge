@@ -304,11 +304,9 @@ class XenForoBridge extends BridgeAbstract
 
                 // We can optimize performance by caching all but the last page
                 if ($page != $lastpage) {
-                    $html = getSimpleHTMLDOMCached($pageurl)
-                        or returnServerError('Error loading contents from ' . $pageurl . '!');
+                    $html = getSimpleHTMLDOMCached($pageurl);
                 } else {
-                    $html = getSimpleHTMLDOM($pageurl)
-                        or returnServerError('Error loading contents from ' . $pageurl . '!');
+                    $html = getSimpleHTMLDOM($pageurl);
                 }
 
                 $html = defaultLinkTo($html, $hosturl);
@@ -347,11 +345,9 @@ class XenForoBridge extends BridgeAbstract
 
                 // We can optimize performance by caching all but the last page
                 if ($page != $lastpage) {
-                    $html = getSimpleHTMLDOMCached($pageurl)
-                        or returnServerError('Error loading contents from ' . $pageurl . '!');
+                    $html = getSimpleHTMLDOMCached($pageurl);
                 } else {
-                    $html = getSimpleHTMLDOM($pageurl)
-                        or returnServerError('Error loading contents from ' . $pageurl . '!');
+                    $html = getSimpleHTMLDOM($pageurl);
                 }
 
                 $html = defaultLinkTo($html, $hosturl);
@@ -435,8 +431,6 @@ class XenForoBridge extends BridgeAbstract
                 $df = date_create_from_format('d M Y \u\m H:i \U\h\r', $date);
                 break;
         }
-
-        // Debug::log(date_format($df, 'U'));
 
         return date_format($df, 'U');
     }

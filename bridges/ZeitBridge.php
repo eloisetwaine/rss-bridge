@@ -50,24 +50,20 @@ class ZeitBridge extends FeedExpander
             'defaultValue' => 5
         ]
     ]];
-    const LIMIT = 5;
 
     public function collectData()
     {
-        $this->collectExpandableDatas(
-            $this->getInput('category'),
-            $this->getInput('limit') ?: static::LIMIT
-        );
+        $url = $this->getInput('category');
+        $limit = $this->getInput('limit') ?: 5;
+
+        $this->collectExpandableDatas($url, $limit);
     }
 
-    protected function parseItem($item)
+    protected function parseItem(array $item)
     {
-        $item = parent::parseItem($item);
         $item['enclosures'] = [];
 
         $headers = [
-            'User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-            'X-Forwarded-For: 66.249.66.1',
             'Cookie: zonconsent=' . date('Y-m-d\TH:i:s.v\Z'),
         ];
 
@@ -91,7 +87,9 @@ class ZeitBridge extends FeedExpander
         // remove known bad elements
         foreach (
             $article->find(
-                'aside, .visually-hidden, .carousel-container, #tickaroo-liveblog, .zplus-badge, .article-heading__container--podcast'
+                'aside, .visually-hidden, .carousel-container, #tickaroo-liveblog, .zplus-badge,
+                .article-heading__container--podcast, .podcast-player__image, div[data-paywall],
+                .js-embed-consent, script, nav, .article-flexible-toc__subheading-link, .faq-link'
             ) as $bad
         ) {
             $bad->remove();
@@ -112,16 +110,23 @@ class ZeitBridge extends FeedExpander
         }
 
         // authors
-        $authors = $article->find('*[itemtype*="schema.org/Person"]');
-        if (!$authors) {
-            $authors = $article->find('.metadata__source');
-        }
+        $authors = $article->find('*[itemtype*="schema.org/Person"]') ?? $article->find('.metadata__source');
         if ($authors) {
-            $item['author'] = implode(', ', $authors);
+            $item['author'] = implode(', ', array_map(function ($e) {
+                return trim($e->plaintext);
+            }, $authors));
+        }
+
+        $item['content'] = '';
+
+        // summary
+        $summary = $article->find('.summary');
+        if ($summary) {
+            $item['content'] .= implode('', $summary);
         }
 
         // header image
-        $headerimg = $article->find('*[data-ct-row="headerimage"]', 0) ?? $article->find('header', 0);
+        $headerimg = $article->find('*[data-ct-row="headerimage"]', 0) ?? $article->find('.article-header', 0) ?? $article->find('header', 0);
         if ($headerimg) {
             $item['content'] .= implode('', $headerimg->find('img[src], figcaption'));
         }
@@ -131,7 +136,7 @@ class ZeitBridge extends FeedExpander
 
         if ($pages) {
             foreach ($pages as $page) {
-                $elements = $page->find('p, h2, figcaption, img[src]');
+                $elements = $page->find('p, ul, ol, h2, figure.article__media img[src], figure.article__media figcaption, figure.quote');
                 $item['content'] .= implode('', $elements);
             }
         }

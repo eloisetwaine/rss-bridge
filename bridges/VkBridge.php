@@ -2,13 +2,13 @@
 
 class VkBridge extends BridgeAbstract
 {
-    const MAINTAINER = 'em92';
+    // const MAINTAINER = 'em92';
     // const MAINTAINER = 'pmaziere';
     // const MAINTAINER = 'ahiles3005';
     const NAME = 'VK.com';
     const URI = 'https://vk.com/';
-    const CACHE_TIMEOUT = 300; // 5min
-    const DESCRIPTION = 'Working with open pages';
+    const CACHE_TIMEOUT = 3600; // 1h
+    const DESCRIPTION = 'Does not work anymore';
     const PARAMETERS = [
         [
             'u' => [
@@ -29,11 +29,12 @@ class VkBridge extends BridgeAbstract
         'https://vk.com/groupname/anythingelse' => ['u' => 'groupname'],
         'https://vk.com/groupname?w=somethingelse' => ['u' => 'groupname'],
         'https://vk.com/with_underscore' => ['u' => 'with_underscore'],
+        'https://vk.com/vk.cats' => ['u' => 'vk.cats'],
     ];
 
     protected $pageName;
     protected $tz = 0;
-    private $urlRegex = '/vk\.com\/([\w]+)/';
+    private $urlRegex = '/vk\.com\/([\w.]+)/';
 
     public function getURI()
     {
@@ -64,6 +65,7 @@ class VkBridge extends BridgeAbstract
 
     public function collectData()
     {
+        return;
         $text_html = $this->getContents();
 
         $text_html = iconv('windows-1251', 'utf-8//ignore', $text_html);
@@ -76,15 +78,18 @@ class VkBridge extends BridgeAbstract
                 break;
             }
         }
-        $pageName = $html->find('.page_name', 0);
+        $pageName = $html->find('meta[property="og:title"]', 0);
         if (is_object($pageName)) {
-            $pageName = $pageName->plaintext;
-            $this->pageName = htmlspecialchars_decode($pageName);
+            $pageName = $pageName->getAttribute('content');
+            $this->pageName = $pageName;
         }
         foreach ($html->find('div.replies') as $comment_block) {
             $comment_block->outertext = '';
         }
-        $html->load($html->save());
+
+        // expensive operation
+        $save = $html->save();
+        $html->load($save);
 
         $pinned_post_item = null;
         $last_post_id = 0;
@@ -155,8 +160,8 @@ class VkBridge extends BridgeAbstract
                     $article_author_selector = 'div.article_snippet__author';
                     $article_thumb_selector = 'div.article_snippet__image';
                 }
-                $article_title = $article->find($article_title_selector, 0)->innertext;
-                $article_author = $article->find($article_author_selector, 0)->innertext;
+                $article_title = $article->find($article_title_selector, 0)->innertext ?? '';
+                $article_author = $article->find($article_author_selector, 0)->innertext ?? '';
                 $article_link = $article->getAttribute('href');
                 $article_img_element_style = $article->find($article_thumb_selector, 0)->getAttribute('style');
                 preg_match('/background-image: url\((.*)\)/', $article_img_element_style, $matches);
@@ -311,6 +316,51 @@ class VkBridge extends BridgeAbstract
                 $copy_quote->outertext = "<br>Reposted ($copy_quote_author): <br>$copy_quote_content";
             }
 
+            foreach ($post->find('.PrimaryAttachment .PhotoPrimaryAttachment') as $pa) {
+                $img = $pa->find('.PhotoPrimaryAttachment__imageElement', 0);
+                if (is_object($img)) {
+                    $pa->outertext = $img->outertext;
+                }
+            }
+
+            foreach ($post->find('.SecondaryAttachment') as $sa) {
+                $sa_href = $sa->getAttribute('href');
+                if (!$sa_href) {
+                    $sa_href = '';
+                }
+                $sa_task_click = $sa->getAttribute('data-task-click');
+
+                if (str_starts_with($sa_href, 'https://vk.com/doc')) {
+                    // document
+                    $doc_title = $sa->find('.SecondaryAttachment__childrenText', 0)->innertext;
+                    $doc_size = $sa->find('.SecondaryAttachmentSubhead', 0)->innertext;
+                    $doc_link = $sa_href;
+                    $content_suffix .= "<br>Doc: <a href='$doc_link'>$doc_title</a> ($doc_size)";
+                    $sa->outertext = '';
+                } else if (str_starts_with($sa_href, 'https://vk.com/@')) {
+                    // article
+                    $article_title = $sa->find('.SecondaryAttachment__childrenText', 0)->innertext;
+                    $article_author = explode('Article · from ', $sa->find('.SecondaryAttachmentSubhead', 0)->innertext)[1];
+                    $article_link = $sa_href;
+                    $content_suffix .= "<br>Article: <a href='$article_link'>$article_title ($article_author)</a>";
+                    $sa->outertext = '';
+                } else if ($sa_task_click == 'SecondaryAttachment/playAudio') {
+                    // audio
+                    $audio_json = json_decode(html_entity_decode($sa->getAttribute('data-audio')));
+                    $audio_link = $audio_json->url;
+                    $audio_title = $sa->find('.SecondaryAttachment__childrenText', 0)->innertext;
+                    $audio_author = $sa->find('.SecondaryAttachmentSubhead', 0)->innertext;
+                    $content_suffix .= "<br>Audio: <a href='$audio_link'>$audio_title ($audio_author)</a>";
+                    $sa->outertext = '';
+                } else if ($sa_task_click == 'SecondaryAttachment/playPlaylist') {
+                    // playlist link
+                    $playlist_title = $sa->find('.SecondaryAttachment__childrenText', 0)->innertext;
+                    $playlist_link = $sa->find('.SecondaryAttachment__link', 0)->getAttribute('href');
+                    $content_suffix .= "<br>Playlist: <a href='$playlist_link'>$playlist_title</a>";
+                    $sa->outertext = '';
+                }
+            }
+
             $item = [];
             $content = strip_tags(backgroundToImg($post->find('div.wall_text', 0)->innertext), '<a><br><img>');
             $content .= $content_suffix;
@@ -342,10 +392,13 @@ class VkBridge extends BridgeAbstract
             $item['categories'] = $hashtags;
 
             // get post link
-            $post_link = $post->find('a.PostHeaderSubtitle__link', 0)->getAttribute('href');
-            preg_match('/wall-?\d+_(\d+)/', $post_link, $preg_match_result);
-            $item['post_id'] = intval($preg_match_result[1]);
-            $item['uri'] = $post_link;
+            $var = $post->find('a.PostHeaderSubtitle__link', 0);
+            if ($var) {
+                $post_link = $var->getAttribute('href');
+                preg_match('/wall-?\d+_(\d+)/', $post_link, $preg_match_result);
+                $item['post_id'] = intval($preg_match_result[1]);
+                $item['uri'] = $post_link;
+            }
             $item['timestamp'] = $this->getTime($post);
             $item['title'] = $this->getTitle($item['content']);
             $item['author'] = $post_author;
@@ -353,7 +406,7 @@ class VkBridge extends BridgeAbstract
                 // do not append it now
                 $pinned_post_item = $item;
             } else {
-                $last_post_id = $item['post_id'];
+                $last_post_id = $item['post_id'] ?? null;
                 $this->items[] = $item;
             }
         }
@@ -410,7 +463,9 @@ class VkBridge extends BridgeAbstract
 
     private function getTitle($content)
     {
-        preg_match('/^["\w\ \p{L}\(\)\?#«»-]+/mu', htmlspecialchars_decode($content), $result);
+        $content = explode('<br>', $content)[0];
+        $content = strip_tags($content);
+        preg_match('/^[:\,"\w\ \p{L}\(\)\?#«»\-\–\—||&\.%\\₽\/+\;\!]+/mu', htmlspecialchars_decode($content), $result);
         if (count($result) == 0) {
             return 'untitled';
         }
@@ -423,7 +478,10 @@ class VkBridge extends BridgeAbstract
         if ($accurateDateElement) {
             return $accurateDateElement->getAttribute('time');
         } else {
-            $strdate = $post->find('time.PostHeaderSubtitle__item', 0)->plaintext;
+            $strdate = $post->find('time.PostHeaderSubtitle__item', 0)->plaintext ?? null;
+            if (!$strdate) {
+                return 0;
+            }
             $strdate = preg_replace('/[\x00-\x1F\x7F-\xFF]/', ' ', $strdate);
 
             $date = date_parse($strdate);
@@ -450,25 +508,29 @@ class VkBridge extends BridgeAbstract
 
     private function getContents()
     {
-        $header = ['Accept-language: en', 'Cookie: remixlang=3'];
+        $httpHeaders = [
+            'Accept-language: en',
+            'Cookie: remixlang=3',
+        ];
         $redirects = 0;
         $uri = $this->getURI();
 
         while ($redirects < 2) {
-            $response = getContents($uri, $header, [CURLOPT_FOLLOWLOCATION => false], true);
+            $response = getContents($uri, $httpHeaders, [CURLOPT_FOLLOWLOCATION => false], true);
 
-            if (in_array($response['code'], [200, 304])) {
-                return $response['content'];
+            if (in_array($response->getCode(), [200, 304])) {
+                return $response->getBody();
             }
 
-            $uri = urljoin(self::URI, $response['header']['location'][0]);
+            $headers = $response->getHeaders();
+            $uri = urljoin(self::URI, $headers['location'][0]);
 
             if (str_contains($uri, '/429.html')) {
-                returnServerError('VK responded "Too many requests"');
+                throw new RateLimitException();
             }
 
             if (!preg_match('#^https?://vk.com/#', $uri)) {
-                returnServerError('Unexpected redirect location');
+                returnServerError('Unexpected redirect location: ' . $uri);
             }
 
             $redirects++;

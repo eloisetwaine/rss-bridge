@@ -34,11 +34,9 @@ class ElloBridge extends BridgeAbstract
         ];
 
         if (!empty($this->getInput('u'))) {
-            $postData = getContents(self::URI . 'api/v2/users/~' . urlencode($this->getInput('u')) . '/posts', $header) or
-                returnServerError('Unable to query Ello API.');
+            $postData = getContents(self::URI . 'api/v2/users/~' . urlencode($this->getInput('u')) . '/posts', $header);
         } else {
-            $postData = getContents(self::URI . 'api/v2/posts?terms=' . urlencode($this->getInput('s')), $header) or
-                returnServerError('Unable to query Ello API.');
+            $postData = getContents(self::URI . 'api/v2/posts?terms=' . urlencode($this->getInput('s')), $header);
         }
 
         $postData = json_decode($postData);
@@ -113,21 +111,17 @@ class ElloBridge extends BridgeAbstract
 
     private function getAPIKey()
     {
-        $cacheFactory = new CacheFactory();
+        $cacheKey = 'ElloBridge_key';
+        $apiKey = $this->cache->get($cacheKey);
 
-        $cache = $cacheFactory->create();
-        $cache->setScope('ElloBridge');
-        $cache->setKey(['key']);
-        $key = $cache->loadData();
-
-        if ($key == null) {
-            $keyInfo = getContents(self::URI . 'api/webapp-token') or
-                returnServerError('Unable to get token.');
-            $key = json_decode($keyInfo)->token->access_token;
-            $cache->saveData($key);
+        if (!$apiKey) {
+            $keyInfo = getContents(self::URI . 'api/webapp-token');
+            $apiKey = json_decode($keyInfo)->token->access_token;
+            $ttl = 60 * 60 * 20;
+            $this->cache->set($cacheKey, $apiKey, $ttl);
         }
 
-        return $key;
+        return $apiKey;
     }
 
     public function getName()

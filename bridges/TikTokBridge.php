@@ -8,12 +8,12 @@ class TikTokBridge extends BridgeAbstract
     const MAINTAINER = 'VerifiedJoseph';
     const PARAMETERS = [
         'By user' => [
-        'username' => [
-            'name' => 'Username',
-            'type' => 'text',
-            'required' => true,
-            'exampleValue' => '@tiktok',
-        ]
+            'username' => [
+                'name' => 'Username',
+                'type' => 'text',
+                'required' => true,
+                'exampleValue' => '@tiktok',
+            ]
         ]];
 
     const TEST_DETECT_PARAMETERS = [
@@ -24,41 +24,36 @@ class TikTokBridge extends BridgeAbstract
 
     const CACHE_TIMEOUT = 900; // 15 minutes
 
-    private $feedName = '';
-
-    public function detectParameters($url)
-    {
-        if (preg_match('/tiktok\.com\/(@[\w]+)/', $url, $matches) > 0) {
-            return [
-                'context' => 'By user',
-                'username' => $matches[1]
-            ];
-        }
-
-        return null;
-    }
-
     public function collectData()
     {
-        $html = getSimpleHTMLDOM($this->getURI());
+        $html = getSimpleHTMLDOMCached('https://www.tiktok.com/embed/' . $this->processUsername());
 
-        $title = $html->find('h1', 0)->plaintext ?? self::NAME;
-        $this->feedName = htmlspecialchars_decode($title);
+        $author = $html->find('span[data-e2e=creator-profile-userInfo-TUXText]', 0)->plaintext ?? self::NAME;
+        $authorProfilePicture = $html->find('img[data-e2e=creator-profile-userInfo-Avatar]', 0)->src ?? '';
 
-        foreach ($html->find('div.tiktok-x6y88p-DivItemContainerV2') as $div) {
+        $videos = $html->find('div[data-e2e=common-videoList-VideoContainer]');
+
+        foreach ($videos as $video) {
             $item = [];
 
-            $link = $div->find('a', 0)->href;
-            $image = $div->find('img', 0)->src;
-            $views = $div->find('strong.video-count', 0)->plaintext;
+            // Omit query string (remove tracking parameters)
+            $a = $video->find('a', 0);
+            $href = $a->href;
+            $parsedUrl = parse_url($href);
+            $url = $parsedUrl['scheme'] . '://' . $parsedUrl['host'] . '/' . ltrim($parsedUrl['path'], '/');
 
-            $item['uri'] = $link;
-            $item['title'] = $div->find('a', 1)->plaintext;
-            $item['enclosures'][] = $image;
+            $image = $video->find('video', 0)->poster;
+            $views = $video->find('div[data-e2e=common-Video-Count]', 0)->plaintext;
 
+            $enclosures = [$image, $authorProfilePicture];
+
+            $item['uri'] = $url;
+            $item['title'] = 'Video';
+            $item['author'] = '@' . $author;
+            $item['enclosures'] = $enclosures;
             $item['content'] = <<<EOD
-<a href="{$link}"><img src="{$image}"/></a>
-<p>{$views} views<p>
+<a href="{$url}"><img src="{$image}"/></a>
+<p>{$views} views<p><br/>
 EOD;
 
             $this->items[] = $item;
@@ -79,7 +74,7 @@ EOD;
     {
         switch ($this->queriedContext) {
             case 'By user':
-                return $this->feedName . ' (' . $this->processUsername() . ') - TikTok';
+                return  $this->processUsername() . ' - TikTok';
             default:
                 return parent::getName();
         }
@@ -87,10 +82,25 @@ EOD;
 
     private function processUsername()
     {
-        if (substr($this->getInput('username'), 0, 1) !== '@') {
-            return '@' . $this->getInput('username');
+        $username = trim($this->getInput('username'));
+        if (preg_match('#^https?://www\.tiktok\.com/@(.*)$#', $username, $m)) {
+            return '@' . $m[1];
+        }
+        if (substr($username, 0, 1) !== '@') {
+            return '@' . $username;
+        }
+        return $username;
+    }
+
+    public function detectParameters($url)
+    {
+        if (preg_match('/tiktok\.com\/(@[\w]+)/', $url, $matches) > 0) {
+            return [
+                'context' => 'By user',
+                'username' => $matches[1]
+            ];
         }
 
-        return $this->getInput('username');
+        return null;
     }
 }

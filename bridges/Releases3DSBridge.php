@@ -4,7 +4,7 @@ class Releases3DSBridge extends BridgeAbstract
 {
     const MAINTAINER = 'ORelio';
     const NAME = '3DS Scene Releases';
-    const URI = 'http://www.3dsdb.com/';
+    const URI = 'http://3dsdb.com/';
     const CACHE_TIMEOUT = 10800; // 3h
     const DESCRIPTION = 'Returns the newest scene releases for Nintendo 3DS.';
 
@@ -82,10 +82,10 @@ class Releases3DSBridge extends BridgeAbstract
             $item = [];
             $item['title'] = $name;
             $item['author'] = $publisher;
-            $item['timestamp'] = $ignDate;
-            $item['enclosures'] = [$ignCoverArt];
+            //$item['timestamp'] = $ignDate;
+            //$item['enclosures'] = [$ignCoverArt];
             $item['uri'] = empty($ignLink) ? $searchLinkDuckDuckGo : $ignLink;
-            $item['content'] = $ignDescription . $releaseDescription . $releaseSearchLinks;
+            $item['content'] = $releaseDescription . $releaseSearchLinks;
             $this->items[] = $item;
             $limit++;
         }

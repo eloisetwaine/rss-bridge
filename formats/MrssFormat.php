@@ -32,24 +32,11 @@ class MrssFormat extends FormatAbstract
     protected const ATOM_NS = 'http://www.w3.org/2005/Atom';
     protected const MRSS_NS = 'http://search.yahoo.com/mrss/';
 
-    const ALLOWED_IMAGE_EXT = [
-        '.gif',
-        '.jpg',
-        '.png',
-    ];
-
-    public function stringify()
+    public function render(): string
     {
-        $feedUrl = get_current_url();
-        $extraInfos = $this->getExtraInfos();
-        if (empty($extraInfos['uri'])) {
-            $uri = REPOSITORY;
-        } else {
-            $uri = $extraInfos['uri'];
-        }
-
-        $document = new \DomDocument('1.0', $this->getCharset());
+        $document = new \DomDocument('1.0', 'UTF-8');
         $document->formatOutput = true;
+
         $feed = $document->createElement('rss');
         $document->appendChild($feed);
         $feed->setAttribute('version', '2.0');
@@ -59,63 +46,86 @@ class MrssFormat extends FormatAbstract
         $channel = $document->createElement('channel');
         $feed->appendChild($channel);
 
-        $title = $extraInfos['name'];
-        $channelTitle = $document->createElement('title');
-        $channel->appendChild($channelTitle);
-        $channelTitle->appendChild($document->createTextNode($title));
+        $feedArray = $this->getFeed();
+        $uri = $feedArray['uri'];
+        $title = $feedArray['name'];
 
-        $link = $document->createElement('link');
-        $channel->appendChild($link);
-        $link->appendChild($document->createTextNode($uri));
+        foreach ($feedArray as $feedKey => $feedValue) {
+            if (in_array($feedKey, ['atom', 'donationUri'])) {
+                continue;
+            }
+            if ($feedKey === 'name') {
+                $channelTitle = $document->createElement('title');
+                $channel->appendChild($channelTitle);
+                $channelTitle->appendChild($document->createTextNode($title));
 
-        $description = $document->createElement('description');
-        $channel->appendChild($description);
-        $description->appendChild($document->createTextNode($extraInfos['name']));
+                $description = $document->createElement('description');
+                $channel->appendChild($description);
+                $description->appendChild($document->createTextNode($title));
+            } elseif ($feedKey === 'uri') {
+                $link = $document->createElement('link');
+                $channel->appendChild($link);
+                $link->appendChild($document->createTextNode($uri));
 
-        $icon = $extraInfos['icon'];
-        if (!empty($icon) && in_array(substr($icon, -4), self::ALLOWED_IMAGE_EXT)) {
-            $feedImage = $document->createElement('image');
-            $channel->appendChild($feedImage);
-            $iconUrl = $document->createElement('url');
-            $iconUrl->appendChild($document->createTextNode($icon));
-            $feedImage->appendChild($iconUrl);
-            $iconTitle = $document->createElement('title');
-            $iconTitle->appendChild($document->createTextNode($title));
-            $feedImage->appendChild($iconTitle);
-            $iconLink = $document->createElement('link');
-            $iconLink->appendChild($document->createTextNode($uri));
-            $feedImage->appendChild($iconLink);
+                $linkAlternate = $document->createElementNS(self::ATOM_NS, 'link');
+                $channel->appendChild($linkAlternate);
+                $linkAlternate->setAttribute('rel', 'alternate');
+                $linkAlternate->setAttribute('type', 'text/html');
+                $linkAlternate->setAttribute('href', $uri);
+
+                $linkSelf = $document->createElementNS(self::ATOM_NS, 'link');
+                $channel->appendChild($linkSelf);
+                $linkSelf->setAttribute('rel', 'self');
+                $linkSelf->setAttribute('type', 'application/atom+xml');
+                $feedUrl = get_current_url();
+                $linkSelf->setAttribute('href', $feedUrl);
+            } elseif ($feedKey === 'icon') {
+                $icon = $feedValue;
+                if ($icon) {
+                    $feedImage = $document->createElement('image');
+                    $channel->appendChild($feedImage);
+                    $iconUrl = $document->createElement('url');
+                    $iconUrl->appendChild($document->createTextNode($icon));
+                    $feedImage->appendChild($iconUrl);
+                    $iconTitle = $document->createElement('title');
+                    $iconTitle->appendChild($document->createTextNode($title));
+                    $feedImage->appendChild($iconTitle);
+                    $iconLink = $document->createElement('link');
+                    $iconLink->appendChild($document->createTextNode($uri));
+                    $feedImage->appendChild($iconLink);
+                }
+            } elseif ($feedKey === 'itunes') {
+                $feed->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:itunes', self::ITUNES_NS);
+                foreach ($feedValue as $itunesKey => $itunesValue) {
+                    $itunesProperty = $document->createElementNS(self::ITUNES_NS, $itunesKey);
+                    $channel->appendChild($itunesProperty);
+                    $itunesProperty->appendChild($document->createTextNode($itunesValue));
+                }
+            } else {
+                $element = $document->createElement($feedKey);
+                $channel->appendChild($element);
+                $element->appendChild($document->createTextNode($feedValue));
+            }
         }
 
-        $linkAlternate = $document->createElementNS(self::ATOM_NS, 'link');
-        $channel->appendChild($linkAlternate);
-        $linkAlternate->setAttribute('rel', 'alternate');
-        $linkAlternate->setAttribute('type', 'text/html');
-        $linkAlternate->setAttribute('href', $uri);
-
-        $linkSelf = $document->createElementNS(self::ATOM_NS, 'link');
-        $channel->appendChild($linkSelf);
-        $linkSelf->setAttribute('rel', 'self');
-        $linkSelf->setAttribute('type', 'application/atom+xml');
-        $linkSelf->setAttribute('href', $feedUrl);
-
         foreach ($this->getItems() as $item) {
+            $itemArray = $item->toArray();
             $itemTimestamp = $item->getTimestamp();
             $itemTitle = $item->getTitle();
             $itemUri = $item->getURI();
-            $itemContent = $item->getContent() ? break_annoying_html_tags($item->getContent()) : '';
-            $entryID = $item->getUid();
+            $itemContent = $item->getContent() ?? '';
+            $itemUid = $item->getUid();
             $isPermaLink = 'false';
 
-            if (empty($entryID) && !empty($itemUri)) {
+            if (empty($itemUid) && !empty($itemUri)) {
                 // Fallback to provided URI
-                $entryID = $itemUri;
+                $itemUid = $itemUri;
                 $isPermaLink = 'true';
             }
 
-            if (empty($entryID)) {
+            if (empty($itemUid)) {
                 // Fallback to title and content
-                $entryID = hash('sha1', $itemTitle . $itemContent);
+                $itemUid = hash('sha1', $itemTitle . $itemContent);
             }
 
             $entry = $document->createElement('item');
@@ -127,6 +137,23 @@ class MrssFormat extends FormatAbstract
                 $entryTitle->appendChild($document->createTextNode($itemTitle));
             }
 
+            if (isset($itemArray['itunes'])) {
+                $feed->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:itunes', self::ITUNES_NS);
+                foreach ($itemArray['itunes'] as $itunesKey => $itunesValue) {
+                    $itunesProperty = $document->createElementNS(self::ITUNES_NS, $itunesKey);
+                    $entry->appendChild($itunesProperty);
+                    $itunesProperty->appendChild($document->createTextNode($itunesValue));
+                }
+
+                if (isset($itemArray['enclosure'])) {
+                    $itunesEnclosure = $document->createElement('enclosure');
+                    $entry->appendChild($itunesEnclosure);
+                    $itunesEnclosure->setAttribute('url', $itemArray['enclosure']['url']);
+                    $itunesEnclosure->setAttribute('length', $itemArray['enclosure']['length']);
+                    $itunesEnclosure->setAttribute('type', $itemArray['enclosure']['type']);
+                }
+            }
+
             if (!empty($itemUri)) {
                 $entryLink = $document->createElement('link');
                 $entry->appendChild($entryLink);
@@ -136,7 +163,7 @@ class MrssFormat extends FormatAbstract
             $entryGuid = $document->createElement('guid');
             $entryGuid->setAttribute('isPermaLink', $isPermaLink);
             $entry->appendChild($entryGuid);
-            $entryGuid->appendChild($document->createTextNode($entryID));
+            $entryGuid->appendChild($document->createTextNode($itemUid));
 
             if (!empty($itemTimestamp)) {
                 $entryPublished = $document->createElement('pubDate');
@@ -164,11 +191,7 @@ class MrssFormat extends FormatAbstract
             }
         }
 
-        $toReturn = $document->saveXML();
-
-        // Remove invalid non-UTF8 characters
-        ini_set('mbstring.substitute_character', 'none');
-        $toReturn = mb_convert_encoding($toReturn, $this->getCharset(), 'UTF-8');
-        return $toReturn;
+        $xml = $document->saveXML();
+        return $xml;
     }
 }

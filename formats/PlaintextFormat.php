@@ -4,20 +4,13 @@ class PlaintextFormat extends FormatAbstract
 {
     const MIME_TYPE = 'text/plain';
 
-    public function stringify()
+    public function render(): string
     {
-        $items = $this->getItems();
-        $data = [];
-
-        foreach ($items as $item) {
-            $data[] = $item->toArray();
+        $feed = $this->getFeed();
+        foreach ($this->getItems() as $item) {
+            $feed['items'][] = $item->toArray();
         }
-
-        $toReturn = print_r($data, true);
-
-        // Remove invalid non-UTF8 characters
-        ini_set('mbstring.substitute_character', 'none');
-        $toReturn = mb_convert_encoding($toReturn, $this->getCharset(), 'UTF-8');
-        return $toReturn;
+        $text = print_r($feed, true);
+        return $text;
     }
 }

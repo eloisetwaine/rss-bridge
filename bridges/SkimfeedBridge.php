@@ -455,11 +455,12 @@ class SkimfeedBridge extends BridgeAbstract
             return null;
         }
 
-        foreach (self::PARAMETERS as $channels) {
+        foreach (self::PARAMETERS as $context => $channels) {
             foreach ($channels as $box_name => $box) {
                 foreach ($box['values'] as $name => $channel_url) {
                     if (static::URI . $channel_url === $url) {
                         return [
+                            'context' => $context,
                             $box_name => $name,
                         ];
                     }
@@ -632,8 +633,7 @@ class SkimfeedBridge extends BridgeAbstract
             $author = '<a href="' . $anchor->href . '">' . trim($anchor->plaintext) . '</a>';
             $uri    = $anchor->href;
 
-            $box_html = getSimpleHTMLDOM($uri)
-                or returnServerError('Could not load custom feed!');
+            $box_html = getSimpleHTMLDOM($uri);
 
             $this->extractFeed($box_html, $author);
         }
@@ -664,8 +664,7 @@ class SkimfeedBridge extends BridgeAbstract
      */
     private function exportBoxChannels()
     {
-        $html = getSimpleHTMLDOMCached(static::URI)
-            or returnServerError('No contents received from Skimfeed!');
+        $html = getSimpleHTMLDOMCached(static::URI);
 
         if (!$this->isCompatible($html)) {
             returnServerError('Skimfeed version is not compatible!');
@@ -721,8 +720,7 @@ EOD;
      */
     private function exportTechChannels()
     {
-        $html = getSimpleHTMLDOMCached(static::URI)
-            or returnServerError('No contents received from Skimfeed!');
+        $html = getSimpleHTMLDOMCached(static::URI);
 
         if (!$this->isCompatible($html)) {
             returnServerError('Skimfeed version is not compatible!');
@@ -758,8 +756,7 @@ EOD;
 
             $message .= "\t\t'{$title}' => array(\n";
 
-            $channel_html = getSimpleHTMLDOMCached(static::URI . $uri)
-                or returnServerError('Could not load tech channel ' . $channel->plaintext . '!');
+            $channel_html = getSimpleHTMLDOMCached(static::URI . $uri);
 
             $boxes = $channel_html->find('#boxx .boxes')
                 or returnServerError('Could not find boxes!');

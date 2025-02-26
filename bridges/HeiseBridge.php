@@ -103,6 +103,16 @@ class HeiseBridge extends FeedExpander
             'required' => false,
             'title' => 'Specify number of full articles to return',
             'defaultValue' => 5
+        ],
+        'sessioncookie' => [
+            'name' => 'Session Cookie',
+            'required' => false,
+            'title' => <<<'TITLE'
+                If you have a heise+ subscription,
+                you can enter your cookie (ssohls) here to
+                have heise+ articles displayed in full.
+                By default the cookie is 1 year valid.
+                TITLE,
         ]
     ]];
     const LIMIT = 5;
@@ -115,9 +125,9 @@ class HeiseBridge extends FeedExpander
         );
     }
 
-    protected function parseItem($feedItem)
+    protected function parseItem(array $item)
     {
-        $item = parent::parseItem($feedItem);
+        $sessioncookie = $this->getInput('sessioncookie');
 
         // strip rss parameter
         $item['uri'] = explode('?', $item['uri'])[0];
@@ -126,15 +136,15 @@ class HeiseBridge extends FeedExpander
         if (strpos($item['uri'], 'https://www.heise.de') !== 0) {
             return $item;
         }
-
-        // abort on heise+ articles and link to archive.ph for full-text content
-        if (str_starts_with($item['title'], 'heise+ |')) {
-            $item['uri'] = 'https://archive.ph/?run=1&url=' . urlencode($item['uri']);
+        // abort on heise+ articles
+        if ($sessioncookie == '' && str_starts_with($item['title'], 'heise+ |')) {
             return $item;
         }
 
         $item['uri'] .= '?seite=all';
-        $article = getSimpleHTMLDOMCached($item['uri']);
+        $article = getSimpleHTMLDOM($item['uri'], [
+            'cookie: ssohls=' . $sessioncookie
+        ]);
 
         if ($article) {
             $article = defaultLinkTo($article, $item['uri']);
@@ -150,8 +160,16 @@ class HeiseBridge extends FeedExpander
         $article = defaultLinkTo($article, $item['uri']);
 
         // remove unwanted stuff
-        foreach ($article->find('figure.branding, a-ad, div.ho-text, a-img, .opt-in__content-container, .a-toc__list, a-collapse') as $element) {
+        foreach (
+            $article->find('figure.branding, figure.a-inline-image, a-ad, div.ho-text, a-img,
+            .a-toc__list, a-collapse, .opt-in__description, .opt-in__footnote') as $element
+        ) {
             $element->remove();
+        }
+        foreach ($article->find('img') as $element) {
+            if (str_contains($element->alt, 'l+f')) {
+                $element->remove();
+            }
         }
         // reload html, as remove() is buggy
         $article = str_get_html($article->outertext);
@@ -169,7 +187,31 @@ class HeiseBridge extends FeedExpander
             }
         }
 
-        $categories = $article->find('.article-footer__topics ul.topics li.topics__item');
+        //fix for embbedded youtube-videos
+        $oldlink = '';
+        foreach ($article->find('div.video__yt-container') as &$ytvideo) {
+            if (preg_match('/www.youtube.*?\"/', $ytvideo->innertext, $link) && $link[0] != $oldlink) {
+                //save link to prevent duplicates
+                $oldlink = $link[0];
+                $ytiframe = <<<EOT
+                    <iframe width="560" height="315" src="https://$link[0] title="YouTube video player" frameborder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                EOT;
+                //check if video is in header or article for correct possitioning
+                if (strpos($header->innertext, $link[0])) {
+                    $item['content'] .= $ytiframe;
+                } else {
+                    $ytvideo->innertext .= $ytiframe;
+                    $reloadneeded = 1;
+                }
+            }
+        }
+        if (isset($reloadneeded)) {
+            $article = str_get_html($article->outertext);
+        }
+
+        $categories = $article->find('.article-footer__topics ul.topics li.topics__item a-topic a');
         foreach ($categories as $category) {
             $item['categories'][] = trim($category->plaintext);
         }
@@ -177,7 +219,7 @@ class HeiseBridge extends FeedExpander
         $content = $article->find('.article-content', 0);
         if ($content) {
             $contentElements = $content->find(
-                'p, h3, ul, table, pre, noscript img, a-bilderstrecke h2, a-bilderstrecke figure, a-bilderstrecke figcaption'
+                'p, h3, ul, ol, table, pre, noscript img, a-bilderstrecke h2, a-bilderstrecke figure, a-bilderstrecke figcaption, noscript iframe'
             );
             $item['content'] .= implode('', $contentElements);
         }

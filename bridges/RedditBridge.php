@@ -1,10 +1,16 @@
 <?php
 
+/**
+ * This bridge does NOT use reddit's official rss feeds.
+ *
+ * This bridge uses reddit's json api: https://old.reddit.com/search.json?q=
+ */
 class RedditBridge extends BridgeAbstract
 {
     const MAINTAINER = 'dawidsowa';
     const NAME = 'Reddit Bridge';
-    const URI = 'https://www.reddit.com';
+    const URI = 'https://old.reddit.com';
+    const CACHE_TIMEOUT = 60 * 60 * 2; // 2h
     const DESCRIPTION = 'Return hot submissions from Reddit';
 
     const PARAMETERS = [
@@ -33,6 +39,16 @@ class RedditBridge extends BridgeAbstract
                 'required' => false,
                 'exampleValue' => 'cats, dogs',
                 'title' => 'Keyword search, separated by commas'
+            ],
+            'frontend' => [
+                'type' => 'list',
+                'name' => 'frontend',
+                'title' => 'choose frontend for  reddit',
+                'values' => [
+                    'old.reddit.com' => 'https://old.reddit.com',
+                    'reddit.com' => 'https://reddit.com',
+                    'libreddit.kavin.rocks' => 'https://libreddit.kavin.rocks',
+                ]
             ]
         ],
         'single' => [
@@ -73,51 +89,42 @@ class RedditBridge extends BridgeAbstract
         ]
     ];
 
-    public function detectParameters($url)
-    {
-        $parsed_url = parse_url($url);
-
-        $host = $parsed_url['host'] ?? null;
-
-        if ($host != 'www.reddit.com' && $host != 'old.reddit.com') {
-            return null;
-        }
-
-        $path = explode('/', $parsed_url['path']);
-
-        if ($path[1] == 'r') {
-            return [
-                'r' => $path[2]
-            ];
-        } elseif ($path[1] == 'user') {
-            return [
-                'u' => $path[2]
-            ];
-        } else {
-            return null;
-        }
-    }
-
-    public function getIcon()
-    {
-        return 'https://www.redditstatic.com/desktop2x/img/favicon/favicon-96x96.png';
-    }
-
-    public function getName()
-    {
-        if ($this->queriedContext == 'single') {
-            return 'Reddit r/' . $this->getInput('r');
-        } elseif ($this->queriedContext == 'user') {
-            return 'Reddit u/' . $this->getInput('u');
-        } else {
-            return self::NAME;
-        }
-    }
-
     public function collectData()
+    {
+        $forbiddenKey = 'reddit_forbidden';
+        if ($this->cache->get($forbiddenKey)) {
+            throw new RateLimitException();
+        }
+
+        $rateLimitKey = 'reddit_rate_limit';
+        if ($this->cache->get($rateLimitKey)) {
+            throw new RateLimitException();
+        }
+
+        try {
+            $this->collectDataInternal();
+        } catch (HttpException $e) {
+            if ($e->getCode() === 403) {
+                // 403 Forbidden
+                // This can possibly mean that reddit has permanently blocked this server's ip address
+                $this->cache->set($forbiddenKey, true, 60 * 61);
+                throw new RateLimitException();
+            } elseif ($e->getCode() === 429) {
+                $this->cache->set($rateLimitKey, true, 60 * 61);
+                throw new RateLimitException();
+            }
+            throw $e;
+        }
+    }
+
+    private function collectDataInternal(): void
     {
         $user = false;
         $comments = false;
+        $frontend = $this->getInput('frontend');
+        if ($frontend == '') {
+            $frontend = 'https://old.reddit.com';
+        }
         $section = $this->getInput('d');
 
         switch ($this->queriedContext) {
@@ -134,36 +141,21 @@ class RedditBridge extends BridgeAbstract
                 break;
         }
 
-        if (!($this->getInput('search') === '')) {
-            $keywords = $this->getInput('search');
-            $keywords = str_replace([',', ' '], '%20', $keywords);
-            $keywords = $keywords . '%20';
-        } else {
-            $keywords = '';
-        }
-
-        if (!empty($this->getInput('f')) && $this->queriedContext == 'single') {
-            $flair = $this->getInput('f');
-            $flair = str_replace(' ', '%20', $flair);
-            $flair = 'flair%3A%22' . $flair . '%22%20';
-        } else {
-            $flair = '';
-        }
+        $search = $this->getInput('search');
+        $flareInput = $this->getInput('f');
 
         foreach ($subreddits as $subreddit) {
-            $name = trim($subreddit);
-            $values = getContents(self::URI
-                    . '/search.json?q='
-                    . $keywords
-                    . $flair
-                    . ($user ? 'author%3A' : 'subreddit%3A')
-                    . $name
-                    . '&sort='
-                    . $this->getInput('d')
-                    . '&include_over_18=on');
-            $decodedValues = json_decode($values);
+            $version = 'v0.0.2';
+            $useragent = "rss-bridge $version (https://github.com/RSS-Bridge/rss-bridge)";
+            $url = self::createUrl($search, $flareInput, $subreddit, $user, $section, $this->queriedContext);
 
-            foreach ($decodedValues->data->children as $post) {
+            $response = getContents($url, ['User-Agent: ' . $useragent], [], true);
+
+            $json = $response->getBody();
+
+            $parsedJson = Json::decode($json, false);
+
+            foreach ($parsedJson->data->children as $post) {
                 if ($post->kind == 't1' && !$comments) {
                     continue;
                 }
@@ -178,7 +170,11 @@ class RedditBridge extends BridgeAbstract
                 $item['author'] = $data->author;
                 $item['uid'] = $data->id;
                 $item['timestamp'] = $data->created_utc;
-                $item['uri'] = $this->encodePermalink($data->permalink);
+                $item['uri'] = $this->urlEncodePathParts($data->permalink);
+
+                if ($frontend != 'https://old.reddit.com') {
+                    $item['uri'] = preg_replace('#^https://old\.reddit\.com#', $frontend, $item['uri']);
+                }
 
                 $item['categories'] = [];
 
@@ -198,13 +194,11 @@ class RedditBridge extends BridgeAbstract
                 if ($post->kind == 't1') {
                     // Comment
 
-                    $item['content']
-                        = htmlspecialchars_decode($data->body_html);
-                } elseif ($data->is_self) {
+                    $item['content'] = htmlspecialchars_decode($data->body_html);
+                } elseif ($data->is_self && isset($data->selftext_html)) {
                     // Text post
 
-                    $item['content']
-                        = htmlspecialchars_decode($data->selftext_html);
+                    $item['content'] = htmlspecialchars_decode($data->selftext_html);
                 } elseif (isset($data->post_hint) && $data->post_hint == 'link') {
                     // Link with preview
 
@@ -220,18 +214,11 @@ class RedditBridge extends BridgeAbstract
                         $embed = '';
                     }
 
-                    $item['content'] = $this->template(
-                        $data->url,
-                        $data->thumbnail,
-                        $data->domain
-                    ) . $embed;
-                } elseif (isset($data->post_hint) ? $data->post_hint == 'image' : false) {
+                    $item['content'] = $this->createFigureLink($data->url, $data->thumbnail, $data->domain) . $embed;
+                } elseif (isset($data->post_hint) && $data->post_hint == 'image') {
                     // Single image
 
-                    $item['content'] = $this->link(
-                        $this->encodePermalink($data->permalink),
-                        '<img src="' . $data->url . '" />'
-                    );
+                    $item['content'] = $this->createLink($this->urlEncodePathParts($data->permalink), '<img src="' . $data->url . '" />');
                 } elseif ($data->is_gallery ?? false) {
                     // Multiple images
 
@@ -247,36 +234,25 @@ class RedditBridge extends BridgeAbstract
                 } elseif ($data->is_video) {
                     // Video
 
-                    // Higher index -> Higher resolution
-                    end($data->preview->images[0]->resolutions);
-                    $index = key($data->preview->images[0]->resolutions);
-
-                    $item['content'] = $this->template(
-                        $data->url,
-                        $data->preview->images[0]->resolutions[$index]->url,
-                        'Video'
-                    );
-                } elseif (isset($data->media) ? $data->media->type == 'youtube.com' : false) {
+                    if ($data->media->reddit_video) {
+                        $item['content'] = $this->createVideoContent($data->media->reddit_video);
+                    } else {
+                        // Higher index -> Higher resolution
+                        end($data->preview->images[0]->resolutions);
+                        $index = key($data->preview->images[0]->resolutions);
+                        $item['content'] = $this->createFigureLink($data->url, $data->preview->images[0]->resolutions[$index]->url, 'Video');
+                    }
+                } elseif (isset($data->media) && $data->media->type == 'youtube.com') {
                     // Youtube link
-
-                    $item['content'] = $this->template(
-                        $data->url,
-                        $data->media->oembed->thumbnail_url,
-                        'YouTube'
-                    );
+                    $item['content'] = $this->createFigureLink($data->url, $data->media->oembed->thumbnail_url, 'YouTube');
+                    //$item['content'] = htmlspecialchars_decode($data->media->oembed->html);
                 } elseif (explode('.', $data->domain)[0] == 'self') {
                     // Crossposted text post
                     // TODO (optionally?) Fetch content of the original post.
-
-                    $item['content'] = $this->link(
-                        $this->encodePermalink($data->permalink),
-                        'Crossposted from r/'
-                        . explode('.', $data->domain)[1]
-                    );
+                    $item['content'] = $this->createLink($this->urlEncodePathParts($data->permalink), 'Crossposted from r/' . explode('.', $data->domain)[1]);
                 } else {
                     // Link WITHOUT preview
-
-                    $item['content'] = $this->link($data->url, $data->domain);
+                    $item['content'] = $this->createLink($data->url, $data->domain);
                 }
 
                 $this->items[] = $item;
@@ -284,27 +260,106 @@ class RedditBridge extends BridgeAbstract
         }
         // Sort the order to put the latest posts first, even for mixed subreddits
         usort($this->items, function ($a, $b) {
-            return $a['timestamp'] < $b['timestamp'];
+            return $b['timestamp'] <=> $a['timestamp'];
         });
     }
 
-    private function encodePermalink($link)
+    public static function createUrl($search, $flareInput, $subreddit, bool $user, $section, $queriedContext): string
     {
-        return self::URI . implode(
-            '/',
-            array_map('urlencode', explode('/', $link))
-        );
+        if ($search === '') {
+            $keywords = '';
+        } else {
+            $keywords = $search;
+            $keywords = str_replace([',', ' '], ' ', $keywords);
+            $keywords = $keywords . ' ';
+        }
+
+        if ($flareInput && $queriedContext == 'single') {
+            $flair = $flareInput;
+            $flair = str_replace([',', ' '], ' ', $flair);
+            $flair = 'flair:"' . $flair . '" ';
+        } else {
+            $flair = '';
+        }
+        $name = trim($subreddit);
+        $query = [
+            'q' => $keywords . $flair . ($user ? 'author:' : 'subreddit:') . $name,
+            'sort' => $section,
+            'include_over_18' => 'on',
+        ];
+        return 'https://old.reddit.com/search.json?' . http_build_query($query);
     }
 
-    private function template($href, $src, $caption)
+    public function getIcon()
     {
-        return '<a href="' . $href . '"><figure><figcaption>'
-            . $caption . '</figcaption><img src="'
-            . $src . '"/></figure></a>';
+        return 'https://www.redditstatic.com/desktop2x/img/favicon/favicon-96x96.png';
     }
 
-    private function link($href, $text)
+    public function getName()
     {
-        return '<a href="' . $href . '">' . $text . '</a>';
+        if ($this->queriedContext == 'single') {
+            return 'Reddit r/' . $this->getInput('r');
+        } elseif ($this->queriedContext == 'user') {
+            return 'Reddit u/' . $this->getInput('u');
+        } else {
+            return self::NAME;
+        }
+    }
+
+    private function urlEncodePathParts($link)
+    {
+        return self::URI . implode('/', array_map('urlencode', explode('/', $link)));
+    }
+
+    private function createFigureLink($href, $src, $caption)
+    {
+        return sprintf('<a href="%s"><figure><figcaption>%s</figcaption><img src="%s"/></figure></a>', $href, $caption, $src);
+    }
+
+    private function createLink($href, $text)
+    {
+        return sprintf('<a href="%s">%s</a>', $href, $text);
+    }
+
+    private function createVideoContent(\stdClass $video): string
+    {
+        return <<<HTML
+            <video width="$video->width" height="$video->height" controls>
+                <source src="$video->fallback_url" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
+        HTML;
+    }
+
+    public function detectParameters($url)
+    {
+        try {
+            $urlObject = Url::fromString($url);
+        } catch (UrlException $e) {
+            return null;
+        }
+
+        $host = $urlObject->getHost();
+        $path = $urlObject->getPath();
+
+        $pathSegments = explode('/', $path);
+
+        if ($host !== 'www.reddit.com' && $host !== 'old.reddit.com') {
+            return null;
+        }
+
+        if ($pathSegments[1] == 'r') {
+            return [
+                'context' => 'single',
+                'r' => $pathSegments[2],
+            ];
+        } elseif ($pathSegments[1] == 'user') {
+            return [
+                'context' => 'user',
+                'u' => $pathSegments[2],
+            ];
+        } else {
+            return null;
+        }
     }
 }

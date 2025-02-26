@@ -47,8 +47,10 @@ class CubariBridge extends BridgeAbstract
      */
     public function collectData()
     {
-        $jsonSite = getContents($this->getInput('gist'));
-        $jsonFile = json_decode($jsonSite, true);
+        // TODO: fix trivial SSRF
+        $json = getContents($this->getInput('gist'));
+
+        $jsonFile = Json::decode($json);
 
         $this->mangaTitle = $jsonFile['title'];
 
@@ -66,12 +68,14 @@ class CubariBridge extends BridgeAbstract
     {
         $url = $this->getInput('gist');
 
-        preg_match('/\/([a-z]*)\.githubusercontent.com(.*)/', $url, $matches);
-
-        // raw or gist is first match.
-        $unencoded = $matches[1] . $matches[2];
-
-        return base64_encode($unencoded);
+        if (preg_match('/\/([a-z]*)\.githubusercontent.com(.*)/', $url, $matches)) {
+            // raw or gist is first match.
+            $unencoded = $matches[1] . $matches[2];
+            return base64_encode($unencoded);
+        } else {
+            // todo: fix this
+            return '';
+        }
     }
 
     private function getSanitizedHash($string)

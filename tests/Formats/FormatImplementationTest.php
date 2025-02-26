@@ -24,13 +24,13 @@ class FormatImplementationTest extends TestCase
     public function testClassType($path)
     {
         $this->setFormat($path);
-        $this->assertInstanceOf(FormatInterface::class, $this->obj);
+        $this->assertInstanceOf(FormatAbstract::class, $this->obj);
     }
 
     public function dataFormatsProvider()
     {
         $formats = [];
-        foreach (glob(PATH_LIB_FORMATS . '*.php') as $path) {
+        foreach (glob(__DIR__ . '/../formats/*.php') as $path) {
             $formats[basename($path, '.php')] = [$path];
         }
         return $formats;

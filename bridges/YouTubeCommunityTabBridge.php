@@ -32,7 +32,7 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
     private $itemTitle = '';
 
     private $urlRegex = '/youtube\.com\/(channel|user|c)\/([\w]+)\/community/';
-    private $jsonRegex = '/var ytInitialData = (.*);<\/script>/';
+    private $jsonRegex = '/var ytInitialData = ([^<]*);<\/script>/';
 
     public function detectParameters($url)
     {
@@ -70,7 +70,7 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
             $html = getSimpleHTMLDOM($this->feedUrl);
         }
 
-        $json = $this->extractJson($html->find('body', 0)->innertext);
+        $json = $this->extractJson($html->find('html', 0)->innertext);
 
         $this->feedName = $json->header->c4TabbedHeaderRenderer->title;
 
@@ -78,21 +78,29 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
             returnServerError('Channel does not have a community tab');
         }
 
-        foreach ($this->getCommunityPosts($json) as $post) {
+        $posts = $this->getCommunityPosts($json);
+        foreach ($posts as $key => $post) {
             $this->itemTitle = '';
 
             if (!isset($post->backstagePostThreadRenderer)) {
                 continue;
             }
 
-            $details = $post->backstagePostThreadRenderer->post->backstagePostRenderer;
+            if (isset($post->backstagePostThreadRenderer->post->backstagePostRenderer)) {
+                $details = $post->backstagePostThreadRenderer->post->backstagePostRenderer;
+            } elseif (isset($post->backstagePostThreadRenderer->post->sharedPostRenderer)) {
+                // todo: properly extract data from this shared post
+                $details = $post->backstagePostThreadRenderer->post->sharedPostRenderer;
+            } else {
+                continue;
+            }
 
             $item = [];
             $item['uri'] = self::URI . '/post/' . $details->postId;
-            $item['author'] = $details->authorText->runs[0]->text;
-            $item['content'] = '';
+            $item['author'] = $details->authorText->runs[0]->text ?? null;
+            $item['content'] = $item['uri'];
 
-            if (isset($details->contentText)) {
+            if (isset($details->contentText->runs)) {
                 $text = $this->getText($details->contentText->runs);
 
                 $this->itemTitle = $this->ellipsisTitle($text);
@@ -102,14 +110,20 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
             $item['content'] .= $this->getAttachments($details);
             $item['title'] = $this->itemTitle;
 
+            $date = strtotime(str_replace(' (edited)', '', $details->publishedTimeText->runs[0]->text));
+            if (is_int($date)) {
+                // subtract an increasing multiple of 60 seconds to always preserve the original order
+                $item['timestamp'] = $date - $key * 60;
+            }
+
             $this->items[] = $item;
         }
     }
 
     public function getURI()
     {
-        if (!empty($this->feedUri)) {
-            return $this->feedUri;
+        if (!empty($this->feedUrl)) {
+            return $this->feedUrl;
         }
 
         return parent::getURI();
@@ -190,7 +204,15 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
         $text = '';
 
         foreach ($runs as $part) {
-            $text .= $this->formatUrls($part->text);
+            if (isset($part->navigationEndpoint->browseEndpoint->canonicalBaseUrl)) {
+                $text .= $this->formatUrls($part->text, $part->navigationEndpoint->browseEndpoint->canonicalBaseUrl);
+            } elseif (isset($part->navigationEndpoint->urlEndpoint->url)) {
+                $text .= $this->formatUrls($part->text, $part->navigationEndpoint->urlEndpoint->url);
+            } elseif (isset($part->navigationEndpoint->commandMetadata->webCommandMetadata->url)) {
+                $text .= $this->formatUrls($part->text, $part->navigationEndpoint->commandMetadata->webCommandMetadata->url);
+            } else {
+                $text .= $this->formatUrls($part->text, null);
+            }
         }
 
         return nl2br($text);
@@ -206,8 +228,8 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
         if (isset($details->backstageAttachment)) {
             $attachments = $details->backstageAttachment;
 
-            // Video
             if (isset($attachments->videoRenderer) && isset($attachments->videoRenderer->videoId)) {
+                // Video
                 if (empty($this->itemTitle)) {
                     $this->itemTitle = $this->feedName . ' posted a video';
                 }
@@ -216,10 +238,8 @@ class YouTubeCommunityTabBridge extends BridgeAbstract
 <iframe width="100%" height="410" src="https://www.youtube.com/embed/{$attachments->videoRenderer->videoId}" 
 frameborder="0" allow="encrypted-media;" allowfullscreen></iframe>
 EOD;
-            }
-
-            // Image
-            if (isset($attachments->backstageImageRenderer)) {
+            } elseif (isset($attachments->backstageImageRenderer)) {
+                // Image
                 if (empty($this->itemTitle)) {
                     $this->itemTitle = $this->feedName . ' posted an image';
                 }
@@ -229,10 +249,8 @@ EOD;
                 $content = <<<EOD
 <p><img src="{$lastThumb->url}"></p>
 EOD;
-            }
-
-            // Poll
-            if (isset($attachments->pollRenderer)) {
+            } elseif (isset($attachments->pollRenderer)) {
+                // Poll
                 if (empty($this->itemTitle)) {
                     $this->itemTitle = $this->feedName . ' posted a poll';
                 }
@@ -248,6 +266,23 @@ EOD;
                 $content = <<<EOD
 <hr><p>Poll ({$attachments->pollRenderer->totalVotes->simpleText})<br><ul>{$pollChoices}</ul><p>
 EOD;
+            } elseif (isset($attachments->postMultiImageRenderer->images)) {
+                // Multiple images
+                $images = $attachments->postMultiImageRenderer->images;
+
+                if (is_array($images)) {
+                    if (empty($this->itemTitle)) {
+                        $this->itemTitle = $this->feedName . ' posted ' . count($images) . ' images';
+                    }
+
+                    foreach ($images as $image) {
+                        $lastThumb = end($image->backstageImageRenderer->image->thumbnails);
+
+                        $content .= <<<EOD
+<p><img src="{$lastThumb->url}"></p>
+EOD;
+                    }
+                }
             }
         }
 
@@ -261,6 +296,7 @@ EOD;
     {
         $length = 100;
 
+        $text = strip_tags($text);
         if (strlen($text) > $length) {
             $text = explode('<br>', wordwrap($text, $length, '<br>'));
             return $text[0] . '...';
@@ -269,12 +305,26 @@ EOD;
         return $text;
     }
 
-    private function formatUrls($content)
+    private function formatUrls($content, $url)
     {
-        return preg_replace(
-            '/(http[s]{0,1}\:\/\/[a-zA-Z0-9.\/\?\&=\-_]{4,})/ims',
-            '<a target="_blank" href="$1" target="_blank">$1</a> ',
-            $content
-        );
+        if (substr(strval($url), 0, 1) == '/') {
+            // fix relative URL
+            $url = 'https://www.youtube.com' . $url;
+        } elseif (substr(strval($url), 0, 33) == 'https://www.youtube.com/redirect?') {
+            // extract actual URL from YouTube redirect
+            parse_str(substr($url, 33), $params);
+            if (strpos(($params['q'] ?? ''), rtrim($content, '.')) === 0) {
+                $url = $params['q'];
+            }
+        }
+
+        // ensure all URLs are made clickable
+        $url = $url ?? $content;
+
+        if (filter_var($url, FILTER_VALIDATE_URL)) {
+            return '<a href="' . $url . '" target="_blank">' . $content . '</a>';
+        }
+
+        return $content;
     }
 }

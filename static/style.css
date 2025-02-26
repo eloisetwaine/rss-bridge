@@ -186,6 +186,7 @@ section li {
     margin-left: 1em;
 }
 .bridge-card {
+    position: relative;
     text-align: center;
 }
 
@@ -281,23 +282,13 @@ p.maintainer {
     text-align: right;
 }
 
-.secure-warning {
-    background-color: #ffc600;
-    color: #5f5f5f;
-    box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.3);
-    border-radius: 2px;
-    border: 1px solid transparent;
-    width: 80%;
-    margin: auto auto 6px;
-}
-
 .error strong {
     display: inline-block;
     width: 100px;
 }
 
 /* Hide all forms on the frontpage by default */
-form {
+form.bridge-form {
     display: none;
 }
 
@@ -395,11 +386,6 @@ button {
         }
 
     } /* @supports (display: grid) */
-
-    .secure-warning {
-        width: 100%;
-    }
-
 }
 
 /* Dark theme */
@@ -453,3 +439,39 @@ button {
         color: #d8d3cb;
     }
 }
+
+/* find-feed */
+.search-result {
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  padding: 15px;
+  display: flex;
+  position: relative;
+  text-align: left;
+  margin-bottom: 15px;
+}
+@media (prefers-color-scheme: dark) {
+    .search-result {
+        background-color: #202325;
+    }
+}
+.search-result h2 {
+  color: #288cfc;
+}
+
+.search-result a {
+  text-decoration: none;
+  color: #248afa;
+}
+.search-result .icon {
+  margin: 0 15px 0 0;
+}
+.search-result span {
+  margin-right: 10px;
+}
+.search-result .description {
+  font-size: 110%;
+  margin-right: 0 !important;
+  margin-top: 5px !important;
+}
+/* end find-feed */

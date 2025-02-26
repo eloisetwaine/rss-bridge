@@ -27,12 +27,21 @@ class GettrBridge extends BridgeAbstract
 
     public function collectData()
     {
+        $user = $this->getInput('user');
         $api = sprintf(
             'https://api.gettr.com/u/user/%s/posts?offset=0&max=%s&dir=fwd&incl=posts&fp=f_uo',
-            $this->getInput('user'),
+            $user,
             min($this->getInput('limit'), 20)
         );
-        $data = json_decode(getContents($api), false);
+        try {
+            $json = getContents($api);
+        } catch (HttpException $e) {
+            if ($e->getCode() === 400 && str_contains($e->response->getBody(), 'E_USER_NOTFOUND')) {
+                throw new \Exception('User not found: ' . $user);
+            }
+            throw $e;
+        }
+        $data = json_decode($json, false);
 
         foreach ($data->result->aux->post as $post) {
             $this->items[] = [

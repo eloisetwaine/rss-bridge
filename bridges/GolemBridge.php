@@ -53,7 +53,7 @@ class GolemBridge extends FeedExpander
         ]
     ]];
     const LIMIT = 5;
-    const HEADERS = ['Cookie: golem_consent20=simple|220101;'];
+    const HEADERS = ['Cookie: golem_consent20=simple|250101;'];
 
     public function collectData()
     {
@@ -63,9 +63,8 @@ class GolemBridge extends FeedExpander
         );
     }
 
-    protected function parseItem($item)
+    protected function parseItem(array $item)
     {
-        $item = parent::parseItem($item);
         $item['content'] ??= '';
         $uri = $item['uri'];
 
@@ -82,11 +81,6 @@ class GolemBridge extends FeedExpander
 
             // URI without RSS feed reference
             $item['uri'] = $articlePage->find('head meta[name="twitter:url"]', 0)->content;
-
-            $author = $articlePage->find('article header .authors .authors__name', 0);
-            if ($author) {
-                $item['author'] = $author->plaintext;
-            }
 
             $categories = $articlePage->find('ul.tags__list li');
             foreach ($categories as $category) {
@@ -112,19 +106,39 @@ class GolemBridge extends FeedExpander
 
         $article = $page->find('article', 0);
 
+        //built youtube iframes
+        foreach ($article->find('.embedcontent') as &$embedcontent) {
+            $ytscript = $embedcontent->find('script', 0);
+            if (preg_match('/(www.youtube.com.*?)\"/', $ytscript->innertext, $link)) {
+                $link = 'https://' . str_replace('\\', '', $link[1]);
+                $embedcontent->innertext .= <<<EOT
+                    <iframe width="560" height="315" src="$link" title="YouTube video player" frameborder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>';
+                EOT;
+            }
+        }
+
+        //built golem videos
+        foreach ($article->find('.gvideofig') as &$embedcontent) {
+            if (preg_match('/gvideo_(.*)/', $embedcontent->id, $videoid)) {
+                $embedcontent->innertext .= <<<EOT
+                    <video class="rmp-object-fit-contain rmp-video" x-webkit-airplay="allow" controlslist="nodownload" tabindex="-1"
+                    preload="metadata" src="https://video.golem.de/download/$videoid[1]"></video>                                                                      
+                EOT;
+            }
+        }
+
         // delete known bad elements
         foreach (
             $article->find('div[id*="adtile"], #job-market, #seminars, iframe,
-			div.gbox_affiliate, div.toc, .embedcontent') as $bad
+			div.gbox_affiliate, div.toc') as $bad
         ) {
             $bad->remove();
         }
         // reload html, as remove() is buggy
         $article = str_get_html($article->outertext);
 
-        if ($pageHeader = $article->find('header.paged-cluster-header h1', 0)) {
-            $item .= $pageHeader;
-        }
 
         $header = $article->find('header', 0);
         foreach ($header->find('p, figure') as $element) {
@@ -138,7 +152,7 @@ class GolemBridge extends FeedExpander
             $img->src = $img->getAttribute('data-src-full');
         }
 
-        foreach ($content->find('p, h1, h3, img[src*="."]') as $element) {
+        foreach ($content->find('p, h1, h2, h3, img[src*="."], iframe, video') as $element) {
             $item .= $element;
         }
 

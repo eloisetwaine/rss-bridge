@@ -1,82 +1,18 @@
 <?php
 
 /**
- * This file is part of RSS-Bridge, a PHP project capable of generating RSS and
- * Atom feeds for websites that don't have one.
- *
- * For the full license information, please view the UNLICENSE file distributed
- * with this source code.
- *
- * @package Core
- * @license http://unlicense.org/ UNLICENSE
- * @link    https://github.com/rss-bridge/rss-bridge
- */
-
-/**
  * Configuration module for RSS-Bridge.
  *
  * This class implements a configuration module for RSS-Bridge.
  */
 final class Configuration
 {
-    private const VERSION = 'dev.2023-03-22';
+    private const VERSION = '2025-01-26';
 
     private static $config = [];
 
     private function __construct()
     {
-    }
-
-    /**
-     * Verifies the current installation of RSS-Bridge and PHP.
-     *
-     * Returns an error message and aborts execution if the installation does
-     * not satisfy the requirements of RSS-Bridge.
-     *
-     * @return void
-     */
-    public static function verifyInstallation()
-    {
-        if (version_compare(\PHP_VERSION, '7.4.0') === -1) {
-            throw new \Exception('RSS-Bridge requires at least PHP version 7.4.0!');
-        }
-
-        $errors = [];
-
-        // OpenSSL: https://www.php.net/manual/en/book.openssl.php
-        if (!extension_loaded('openssl')) {
-            $errors[] = 'openssl extension not loaded';
-        }
-
-        // libxml: https://www.php.net/manual/en/book.libxml.php
-        if (!extension_loaded('libxml')) {
-            $errors[] = 'libxml extension not loaded';
-        }
-
-        // Multibyte String (mbstring): https://www.php.net/manual/en/book.mbstring.php
-        if (!extension_loaded('mbstring')) {
-            $errors[] = 'mbstring extension not loaded';
-        }
-
-        // SimpleXML: https://www.php.net/manual/en/book.simplexml.php
-        if (!extension_loaded('simplexml')) {
-            $errors[] = 'simplexml extension not loaded';
-        }
-
-        // Client URL Library (curl): https://www.php.net/manual/en/book.curl.php
-        // Allow RSS-Bridge to run without curl module in CLI mode without root certificates
-        if (!extension_loaded('curl') && !(php_sapi_name() === 'cli' && empty(ini_get('curl.cainfo')))) {
-            $errors[] = 'curl extension not loaded';
-        }
-
-        // JavaScript Object Notation (json): https://www.php.net/manual/en/book.json.php
-        if (!extension_loaded('json')) {
-            $errors[] = 'json extension not loaded';
-        }
-
-        if ($errors) {
-            throw new \Exception(sprintf('Configuration error: %s', implode(', ', $errors)));
-        }
     }
 
     public static function loadConfiguration(array $customConfig = [], array $env = [])
@@ -86,7 +22,7 @@ final class Configuration
         }
         $config = parse_ini_file(__DIR__ . '/../config.default.ini.php', true, INI_SCANNER_TYPED);
         if (!$config) {
-            throw new \Exception('Error parsing config');
+            throw new \Exception('Error parsing ini config');
         }
         foreach ($config as $header => $section) {
             foreach ($section as $key => $value) {
@@ -98,21 +34,6 @@ final class Configuration
                 self::setConfig($header, $key, $value);
             }
         }
-        foreach ($env as $envName => $envValue) {
-            $nameParts = explode('_', $envName);
-            if ($nameParts[0] === 'RSSBRIDGE') {
-                if (count($nameParts) < 3) {
-                    // Invalid env name
-                    continue;
-                }
-                $header = $nameParts[1];
-                $key = $nameParts[2];
-                if ($envValue === 'true' || $envValue === 'false') {
-                    $envValue = filter_var($envValue, FILTER_VALIDATE_BOOLEAN);
-                }
-                self::setConfig($header, $key, $envValue);
-            }
-        }
 
         if (file_exists(__DIR__ . '/../DEBUG')) {
             // The debug mode has been moved to config. Preserve existing installs which has this DEBUG file.
@@ -121,6 +42,52 @@ final class Configuration
             if ($debug) {
                 self::setConfig('system', 'debug_mode_whitelist', explode("\n", str_replace("\r", '', $debug)));
             }
+        }
+
+        if (file_exists(__DIR__ . '/../whitelist.txt')) {
+            $enabledBridges = trim(file_get_contents(__DIR__ . '/../whitelist.txt'));
+            if ($enabledBridges === '*') {
+                self::setConfig('system', 'enabled_bridges', ['*']);
+            } else {
+                self::setConfig('system', 'enabled_bridges', array_filter(array_map('trim', explode("\n", $enabledBridges))));
+            }
+        }
+
+        foreach ($env as $envName => $envValue) {
+            $nameParts = explode('_', $envName);
+            if ($nameParts[0] === 'RSSBRIDGE') {
+                if (count($nameParts) < 3) {
+                    // Invalid env name
+                    continue;
+                }
+
+                // The variable is named $header but it's actually the section in config.ini.php
+                $header = $nameParts[1];
+
+                // Recombine the key if it had multiple underscores
+                $key = implode('_', array_slice($nameParts, 2));
+                $key = strtolower($key);
+
+                // Handle this specifically because it's an array
+                if ($key === 'enabled_bridges') {
+                    $envValue = explode(',', $envValue);
+                    $envValue = array_map('trim', $envValue);
+                }
+
+                if ($envValue === 'true' || $envValue === 'false') {
+                    $envValue = filter_var($envValue, FILTER_VALIDATE_BOOLEAN);
+                }
+
+                self::setConfig($header, $key, $envValue);
+            }
+        }
+
+        if (Debug::isEnabled()) {
+            self::setConfig('cache', 'type', 'array');
+        }
+
+        if (!is_array(self::getConfig('system', 'enabled_bridges'))) {
+            self::throwConfigError('system', 'enabled_bridges', 'Is not an array');
         }
 
         if (
@@ -184,6 +151,9 @@ final class Configuration
         if (!is_string(self::getConfig('error', 'output'))) {
             self::throwConfigError('error', 'output', 'Is not a valid String');
         }
+        if (!in_array(self::getConfig('error', 'output'), ['feed', 'http', 'none'])) {
+            self::throwConfigError('error', 'output', 'Invalid output');
+        }
 
         if (
             !is_numeric(self::getConfig('error', 'report_limit'))
@@ -193,12 +163,18 @@ final class Configuration
         }
     }
 
-    public static function getConfig(string $section, string $key)
+    public static function getConfig(string $section, string $key, $default = null)
     {
-        return self::$config[strtolower($section)][strtolower($key)] ?? null;
+        if (self::$config === []) {
+            throw new \Exception('Config has not been loaded');
+        }
+        return self::$config[strtolower($section)][strtolower($key)] ?? $default;
     }
 
-    private static function setConfig(string $section, string $key, $value): void
+    /**
+     * @internal Please avoid usage
+     */
+    public static function setConfig(string $section, string $key, $value): void
     {
         self::$config[strtolower($section)][strtolower($key)] = $value;
     }

@@ -6,7 +6,6 @@ data/
 *.pydevproject
 .project
 .metadata
-bin/
 tmp/
 *.tmp
 *.bak
@@ -230,6 +229,9 @@ pip-log.txt
 DEBUG
 config.ini.php
 config/*
+!config/nginx.conf
+!config/php-fpm.conf
+!config/php.ini
 
 ######################
 ## VisualStudioCode ##

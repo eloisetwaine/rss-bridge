@@ -48,10 +48,11 @@ class EZTVBridge extends BridgeAbstract
     public function collectData()
     {
         $eztv_uri = $this->getEztvUri();
-        Debug::log($eztv_uri);
         $ids = explode(',', trim($this->getInput('ids')));
         foreach ($ids as $id) {
-            $data = json_decode(getContents(sprintf('%s/api/get-torrents?imdb_id=%s', $eztv_uri, $id)));
+            $url = sprintf('%s/api/get-torrents?imdb_id=%s', $eztv_uri, $id);
+            $json = getContents($url);
+            $data = json_decode($json);
             if (!isset($data->torrents)) {
                 // No results
                 continue;
@@ -97,7 +98,7 @@ class EZTVBridge extends BridgeAbstract
     protected function getItemFromTorrent($torrent)
     {
         $item = [];
-        $item['uri'] = $torrent->episode_url;
+        $item['uri'] = $torrent->episode_url ?? $torrent->torrent_url;
         $item['author'] = $torrent->imdb_id;
         $item['timestamp'] = $torrent->date_released_unix;
         $item['title'] = $torrent->title;

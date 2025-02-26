@@ -32,7 +32,7 @@ class FunkBridge extends BridgeAbstract
                     $url .= '?size=' . $this->getInput('max');
                 }
 
-                $jsonString = getContents($url) or returnServerError('No contents received!');
+                $jsonString = getContents($url);
                 $json = json_decode($jsonString, true);
 
                 foreach ($json['list'] as $element) {
@@ -64,6 +64,7 @@ class FunkBridge extends BridgeAbstract
         $regex = '/^https?:\/\/(?:www\.)?funk\.net\/channel\/([^\/]+).*$/';
         if (preg_match($regex, $url, $urlMatches) > 0) {
             return [
+                'context' => 'Channel',
                 'channel' => $urlMatches[1]
             ];
         } else {

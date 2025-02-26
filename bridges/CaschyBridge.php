@@ -34,10 +34,8 @@ class CaschyBridge extends FeedExpander
         );
     }
 
-    protected function parseItem($feedItem)
+    protected function parseItem(array $item)
     {
-        $item = parent::parseItem($feedItem);
-
         if (strpos($item['uri'], 'https://stadt-bremerhaven.de/') !== 0) {
             return $item;
         }
@@ -56,7 +54,7 @@ class CaschyBridge extends FeedExpander
     {
         // remove unwanted stuff
         foreach (
-            $article->find('div.video-container, div.aawp, p.aawp-disclaimer, iframe.wp-embedded-content, 
+            $article->find('div.aawp, p.aawp-disclaimer, iframe.wp-embedded-content, 
             div.wp-embed, p.wp-caption-text, script') as $element
         ) {
             $element->remove();

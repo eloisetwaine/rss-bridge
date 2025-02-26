@@ -29,10 +29,8 @@ class FolhaDeSaoPauloBridge extends FeedExpander
         ]
     ];
 
-    protected function parseItem($item)
+    protected function parseItem(array $item)
     {
-        $item = parent::parseItem($item);
-
         if ($this->getInput('deep_crawl')) {
             $articleHTMLContent = getSimpleHTMLDOMCached($item['uri']);
             if ($articleHTMLContent) {
@@ -46,8 +44,6 @@ class FolhaDeSaoPauloBridge extends FeedExpander
                     $item['content'] = $text;
                     $item['uri'] = explode('*', $item['uri'])[1];
                 }
-            } else {
-                Debug::log('???: ' . $item['uri']);
             }
         } else {
             $item['uri'] = explode('*', $item['uri'])[1];
@@ -60,13 +56,11 @@ class FolhaDeSaoPauloBridge extends FeedExpander
     {
         $feed_input = $this->getInput('feed');
         if (substr($feed_input, 0, strlen(self::URI)) === self::URI) {
-            Debug::log('Input:: ' . $feed_input);
             $feed_url = $feed_input;
         } else {
             /* TODO: prepend `/` if missing */
             $feed_url = self::URI . '/' . $this->getInput('feed');
         }
-        Debug::log('URL: ' . $feed_url);
         $limit = $this->getInput('amount');
         $this->collectExpandableDatas($feed_url, $limit);
     }

@@ -138,6 +138,7 @@ class BadDragonBridge extends BridgeAbstract
         // Sale
         $regex = '/^(https?:\/\/)?bad-dragon\.com\/sales/';
         if (preg_match($regex, $url, $matches) > 0) {
+            $params['context'] = 'Sales';
             return $params;
         }
 
@@ -192,6 +193,7 @@ class BadDragonBridge extends BridgeAbstract
             isset($urlParams['noAccessories'])
                 && $urlParams['noAccessories'] === '1'
                 && $params['noAccessories'] = 'on';
+            $params['context'] = 'Clearance';
 
             return $params;
         }
@@ -282,8 +284,7 @@ class BadDragonBridge extends BridgeAbstract
             case 'Clearance':
                 $toyData = json_decode(getContents($this->inputToURL(true)));
 
-                $productList = json_decode(getContents(self::URI
-                . 'api/inventory-toy/product-list'));
+                $productList = json_decode(getContents(self::URI . 'api/inventory-toy/product-list'));
 
                 foreach ($toyData->toys as $toy) {
                     $item = [];

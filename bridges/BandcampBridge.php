@@ -111,12 +111,12 @@ class BandcampBridge extends BridgeAbstract
                 $url = self::URI . 'api/hub/1/dig_deeper';
                 $data = $this->buildRequestJson();
                 $header = [
-                'Content-Type: application/json',
-                'Content-Length: ' . strlen($data)
+                    'Content-Type: application/json',
+                    'Content-Length: ' . strlen($data),
                 ];
                 $opts = [
-                CURLOPT_CUSTOMREQUEST => 'POST',
-                CURLOPT_POSTFIELDS => $data
+                    CURLOPT_CUSTOMREQUEST => 'POST',
+                    CURLOPT_POSTFIELDS => $data,
                 ];
                 $content = getContents($url, $header, $opts);
 
@@ -314,7 +314,8 @@ class BandcampBridge extends BridgeAbstract
     {
         $url = self::URI . 'api/' . $endpoint . '?' . http_build_query($query_data);
         // todo: 429 Too Many Requests happens a lot
-        $data = json_decode(getContents($url));
+        $response = getContents($url);
+        $data = json_decode($response);
         return $data;
     }
 
@@ -397,6 +398,7 @@ class BandcampBridge extends BridgeAbstract
         // By tag
         $regex = '/^(https?:\/\/)?bandcamp\.com\/tag\/([^\/.&?\n]+)/';
         if (preg_match($regex, $url, $matches) > 0) {
+            $params['context'] = 'By tag';
             $params['tag'] = urldecode($matches[2]);
             return $params;
         }
@@ -404,6 +406,7 @@ class BandcampBridge extends BridgeAbstract
         // By band
         $regex = '/^(https?:\/\/)?([^\/.&?\n]+?)\.bandcamp\.com/';
         if (preg_match($regex, $url, $matches) > 0) {
+            $params['context'] = 'By band';
             $params['band'] = urldecode($matches[2]);
             return $params;
         }
@@ -411,6 +414,7 @@ class BandcampBridge extends BridgeAbstract
         // By album
         $regex = '/^(https?:\/\/)?([^\/.&?\n]+?)\.bandcamp\.com\/album\/([^\/.&?\n]+)/';
         if (preg_match($regex, $url, $matches) > 0) {
+            $params['context'] = 'By album';
             $params['band'] = urldecode($matches[2]);
             $params['album'] = urldecode($matches[3]);
             return $params;

@@ -1,13 +1,25 @@
 <?php
 
+/**
+ * Good resource on API return values (Ex: illustType):
+ * https://hackage.haskell.org/package/pixiv-0.1.0/docs/Web-Pixiv-Types.html
+ */
 class PixivBridge extends BridgeAbstract
 {
-    // Good resource on API return values (Ex: illustType):
-    // https://hackage.haskell.org/package/pixiv-0.1.0/docs/Web-Pixiv-Types.html
     const NAME = 'Pixiv Bridge';
     const URI = 'https://www.pixiv.net/';
     const DESCRIPTION = 'Returns the tag search from pixiv.net';
-
+    const MAINTAINER = 'mruac';
+    const CONFIGURATION = [
+        'cookie' => [
+            'required' => false,
+            'defaultValue' => null
+        ],
+        'proxy_url' => [
+            'required' => false,
+            'defaultValue' => null
+        ]
+    ];
 
     const PARAMETERS = [
         'global' => [
@@ -23,11 +35,21 @@ class PixivBridge extends BridgeAbstract
             'mode' => [
                 'name' => 'Post Type',
                 'type' => 'list',
-                'values' => ['All Works' => 'all',
-                                  'Illustrations' => 'illustrations/',
-                                  'Manga' => 'manga/',
-                                  'Novels' => 'novels/']
+                'values' => [
+                    'All Works' => 'all',
+                    'Illustrations' => 'illustrations/',
+                    'Manga' => 'manga/',
+                    'Novels' => 'novels/'
+                ]
             ],
+            'mature' => [
+                'name' => 'Include R-18 works',
+                'type' => 'checkbox'
+            ],
+            'ai' => [
+                'name' => 'Include AI-Generated works',
+                'type' => 'checkbox'
+            ]
         ],
         'Tag' => [
             'tag' => [
@@ -76,7 +98,7 @@ class PixivBridge extends BridgeAbstract
             default:
                 return parent::getName();
         }
-        return 'Pixiv ' . $this->getKey('mode') . " from ${context} ${query}";
+        return 'Pixiv ' . $this->getKey('mode') . " from {$context} {$query}";
     }
 
     public function getURI()
@@ -106,7 +128,7 @@ class PixivBridge extends BridgeAbstract
                 break;
             case 'User':
                 $uri = static::URI . 'ajax/user/' . $this->getInput('userid')
-                 . '/profile/top';
+                    . '/profile/top';
                 break;
             default:
                 returnClientError('Invalid Context');
@@ -116,18 +138,48 @@ class PixivBridge extends BridgeAbstract
 
     private function getDataFromJSON($json, $json_key)
     {
-        $json = $json['body'][$json_key];
+        $key = $json_key;
+        if (
+            $this->queriedContext === 'Tag' &&
+            $this->getOption('cookie') !== null
+        ) {
+            switch ($json_key) {
+                case 'illust':
+                case 'manga':
+                    $key = 'illustManga';
+                    break;
+            }
+        }
+        $json = $json['body'][$key];
         // Tags context contains subkey
-        if ($this->queriedContext == 'Tag') {
+        if ($this->queriedContext === 'Tag') {
             $json = $json['data'];
+            if ($this->getOption('cookie') !== null) {
+                switch ($json_key) {
+                    case 'illust':
+                        $json = array_reduce($json, function ($acc, $i) {
+                            if ($i['illustType'] === 0) {
+                                $acc[] = $i;
+                            }
+                            return $acc;
+                        }, []);
+                        break;
+                    case 'manga':
+                        $json = array_reduce($json, function ($acc, $i) {
+                            if ($i['illustType'] === 1) {
+                                $acc[] = $i;
+                            }return $acc;
+                        }, []);
+                        break;
+                }
+            }
         }
         return $json;
     }
 
     private function collectWorksArray()
     {
-        $content = getContents($this->getSearchURI($this->getInput('mode')));
-        $content = json_decode($content, true);
+        $content = $this->getData($this->getSearchURI($this->getInput('mode')), true, true);
         if ($this->getInput('mode') == 'all') {
             $total = [];
             foreach (self::JSON_KEY_MAP[$this->queriedContext] as $mode => $json_key) {
@@ -144,14 +196,36 @@ class PixivBridge extends BridgeAbstract
 
     public function collectData()
     {
+        $this->checkOptions();
+        $proxy_url = $this->getOption('proxy_url');
+        $proxy_url = $proxy_url ? rtrim($proxy_url, '/') : null;
+
         $content = $this->collectWorksArray();
         $content = array_filter($content, function ($v, $k) {
             return !array_key_exists('isAdContainer', $v);
         }, ARRAY_FILTER_USE_BOTH);
+
         // Sort by updateDate to get newest works
         usort($content, function ($a, $b) {
             return $b['updateDate'] <=> $a['updateDate'];
         });
+
+        //exclude AI generated works if unchecked.
+        if ($this->getInput('ai') !== true) {
+            $content = array_filter($content, function ($v) {
+                $isAI = $v['aiType'] === 2;
+                return !$isAI;
+            });
+        }
+
+        //exclude R-18 works if unchecked.
+        if ($this->getInput('mature') !== true) {
+            $content = array_filter($content, function ($v) {
+                $isMature = $v['xRestrict'] > 0;
+                return !$isMature;
+            });
+        }
+
         $content = array_slice($content, 0, $this->getInput('posts'));
 
         foreach ($content as $result) {
@@ -162,18 +236,30 @@ class PixivBridge extends BridgeAbstract
 
             $item = [];
             $item['uid'] = $result['id'];
+
             $subpath = array_key_exists('illustType', $result) ? 'artworks/' : 'novel/show.php?id=';
             $item['uri'] = static::URI . $subpath . $result['id'];
+
             $item['title'] = $result['title'];
             $item['author'] = $result['userName'];
             $item['timestamp'] = $result['updateDate'];
             $item['categories'] = $result['tags'];
-            $cached_image = $this->cacheImage(
-                $result['url'],
-                $result['id'],
-                array_key_exists('illustType', $result)
-            );
-            $item['content'] = "<img src='" . $cached_image . "' />";
+
+            if ($proxy_url) {
+                //use proxy image host if set.
+                if ($this->getInput('fullsize')) {
+                    $ajax_uri = static::URI . 'ajax/illust/' . $result['id'];
+                    $imagejson = $this->getData($ajax_uri, true, true);
+                    $img_url = preg_replace('/https:\/\/i\.pximg\.net/', $proxy_url, $imagejson['body']['urls']['original']);
+                } else {
+                    $img_url = preg_replace('/https:\/\/i\.pximg\.net/', $proxy_url, $result['url']);
+                }
+            } else {
+                $img_url = $result['url'];
+            }
+
+            // Currently, this might result in broken image due to their strict referrer check
+            $item['content'] = sprintf('<a href="%s"><img src="%s"/></a>', $img_url, $img_url);
 
             // Additional content items
             if (array_key_exists('pageCount', $result)) {
@@ -186,42 +272,80 @@ class PixivBridge extends BridgeAbstract
         }
     }
 
-    /**
-     * todo: remove manual file cache
-     */
-    private function cacheImage($url, $illustId, $isImage)
+    private function checkOptions()
     {
-        $illustId = preg_replace('/[^0-9]/', '', $illustId);
-        $thumbnailurl = $url;
-
-        $path = PATH_CACHE . 'pixiv_img/';
-        if (!is_dir($path)) {
-            mkdir($path, 0755, true);
-        }
-
-        $path .= $illustId;
-        if ($this->getInput('fullsize')) {
-            $path .= '_fullsize';
-        }
-        $path .= '.jpg';
-
-        if (!is_file($path)) {
-            // Get fullsize URL
-            if ($isImage && $this->getInput('fullsize')) {
-                $ajax_uri = static::URI . 'ajax/illust/' . $illustId;
-                $imagejson = json_decode(getContents($ajax_uri), true);
-                $url = $imagejson['body']['urls']['original'];
+        $proxy = $this->getOption('proxy_url');
+        if ($proxy) {
+            if (
+                !(strlen($proxy) > 0 && preg_match('/https?:\/\/.*/', $proxy))
+            ) {
+                returnServerError('Invalid proxy_url value set. The proxy must include the HTTP/S at the beginning of the url.');
             }
-
-            $headers = ['Referer: ' . static::URI];
-            try {
-                $illust = getContents($url, $headers);
-            } catch (Exception $e) {
-                $illust = getContents($thumbnailurl, $headers); // Original thumbnail
-            }
-            file_put_contents($path, $illust);
         }
 
-        return get_home_page_url() . 'cache/pixiv_img/' . preg_replace('/.*\//', '', $path);
+        $cookie = $this->getCookie();
+        if ($cookie) {
+            $isAuth = $this->loadCacheValue('is_authenticated');
+            if (!$isAuth) {
+                $res = $this->getData('https://www.pixiv.net/ajax/webpush', true, true);
+                if ($res['error'] === false) {
+                    $this->saveCacheValue('is_authenticated', true);
+                }
+            }
+        }
+    }
+
+    private function checkCookie(array $headers)
+    {
+        if (array_key_exists('set-cookie', $headers)) {
+            foreach ($headers['set-cookie'] as $value) {
+                if (str_starts_with($value, 'PHPSESSID=')) {
+                    parse_str(strtr($value, ['&' => '%26', '+' => '%2B', ';' => '&']), $cookie);
+                    if ($cookie['PHPSESSID'] != $this->getCookie()) {
+                        $this->saveCacheValue('cookie', $cookie['PHPSESSID']);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    private function getCookie()
+    {
+        // checks if cookie is set, if not initialise it with the cookie from the config
+        $value = $this->loadCacheValue('cookie');
+        if (!$value) {
+            $value = $this->getOption('cookie');
+
+            // 30 days + 1 day to let cookie chance to renew
+            $this->saveCacheValue('cookie', $this->getOption('cookie'), 2678400);
+        }
+        return $value;
+    }
+
+    //Cache getContents by default
+    private function getData(string $url, bool $cache = true, bool $getJSON = false, array $httpHeaders = [], array $curlOptions = [])
+    {
+        $cookie_str = $this->getCookie();
+        if ($cookie_str) {
+            $curlOptions[CURLOPT_COOKIE] = 'PHPSESSID=' . $cookie_str;
+        }
+
+        if ($cache) {
+            $response = $this->loadCacheValue($url);
+            if (!$response || is_array($response)) {
+                $response = getContents($url, $httpHeaders, $curlOptions, true);
+                $this->saveCacheValue($url, $response);
+            }
+        } else {
+            $response = getContents($url, $httpHeaders, $curlOptions, true);
+        }
+
+        $this->checkCookie($response->getHeaders());
+
+        if ($getJSON) {
+            return json_decode($response->getBody(), true);
+        }
+        return $response->getBody();
     }
 }

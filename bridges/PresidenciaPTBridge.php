@@ -52,8 +52,9 @@ class PresidenciaPTBridge extends BridgeAbstract
 
     public function collectData()
     {
-        foreach (array_keys($this->getParameters()['Section']) as $k) {
-            Debug::log('Key: ' . var_export($k, true));
+        $contexts = $this->getParameters();
+
+        foreach (array_keys($contexts['Section']) as $k) {
             if ($this->getInput($k)) {
                 $html = getSimpleHTMLDOMCached($this->getURI() . $k);
 
@@ -61,9 +62,9 @@ class PresidenciaPTBridge extends BridgeAbstract
                     $item = [];
 
                     $link = $element->find('a', 0);
-                    $etitle = $element->find('.content-box h2', 0);
-                    $edts = $element->find('p', 1);
-                    $edt = html_entity_decode($edts->innertext, ENT_HTML5);
+                    $etitle = $element->find('.article-title', 0);
+                    $edts = $element->find('.date', 0);
+                    $edt = $edts->innertext;
 
                     $item['title'] = strip_tags($etitle->innertext);
                     $item['uri'] = self::URI . $link->href;
@@ -74,7 +75,7 @@ class PresidenciaPTBridge extends BridgeAbstract
                         }, self::PT_MONTH_NAMES),
                         array_map(function ($num) {
                             return sprintf('-%02d-', $num);
-                        }, range(1, sizeof(self::PT_MONTH_NAMES))),
+                        }, range(1, count(self::PT_MONTH_NAMES))),
                         $edt
                     );
 
